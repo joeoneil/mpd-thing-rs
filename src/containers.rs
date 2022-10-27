@@ -1,38 +1,51 @@
 use std::io::Stdout;
 use termion::input::MouseTerminal;
 use termion::raw::RawTerminal;
-use tui::backend::{Backend, TermionBackend};
+use tui::backend::{TermionBackend};
 use tui::Frame;
-use tui::style::Style;
+use tui::style::{Style, Color};
 use tui::layout::{Alignment, Rect};
 use tui::text::{Span, Text};
-use tui::widgets::{Block, Borders, Paragraph};
+use tui::widgets::{Block, Borders, Paragraph, Wrap};
 
-type F = TermionBackend::<MouseTerminal<RawTerminal<Stdout>>>;
+pub type F = TermionBackend<MouseTerminal<RawTerminal<Stdout>>>;
 
-pub trait Container<B: Backend> {
-    fn draw(&self, f: &mut Frame<B>);
+pub trait Container {
+    fn draw(&self, f: &mut Frame<F>, area: Rect);
 
     fn set_style(&mut self, style: WStyleOpt);
 
-    fn set_bounds(&mut self, bounds: Rect);
-}
+    fn set_override_style(&mut self, style: WStyleOpt);
 
-pub trait MetaContainer<B: Backend> {
-    fn set_child(&mut self, index: usize, child: Box<dyn Container<B>>);
+    fn unset_override_style(&mut self);
 
-    fn get_child(&self, index: usize) -> Option<&Box<dyn Container<B>>>;
+    fn set_child(&mut self, index: usize, child: Box<dyn Container>);
+
+    fn get_child(&self, index: u8) -> Option<&Box<dyn Container>>;
+
+    fn get_child_mut(&mut self, index: u8) -> Option<&mut Box<dyn Container>>;
+
+    fn set_widget(&mut self, widget: Box<dyn Widget>);
+
+    fn get_widget(&self) -> Option<&Box<dyn Widget>>;
+
+    fn get_widget_mut(&mut self) -> Option<&mut Box<dyn Widget>>;
+
+    fn has_children(&self) -> bool;
 }
 
 pub trait Widget {
-    fn draw(&self, f: &mut Frame<F>);
+    fn draw(&self, f: &mut Frame<F>, area: Rect);
 
-    fn get_style(&self) -> &Style;
+    fn get_style(&self) -> WStyle;
+
+    fn set_override_style(&mut self, style: WStyleOpt);
+
+    fn unset_override_style(&mut self);
 
     fn set_style(&mut self, style: WStyleOpt);
-
-    fn set_bounds(&mut self, bounds: Rect);
 }
+
 
 pub struct WStyle {
     title_style: Style,
@@ -40,28 +53,22 @@ pub struct WStyle {
     border_style: Style,
 }
 
-pub struct WStyleOpt {
-    title_style: Option<Style>,
-    text_style: Option<Style>,
-    border_style: Option<Style>,
+impl Default for WStyle {
+    fn default() -> Self {
+        WStyle {
+            title_style: Style::default().fg(Color::White).bg(Color::Black),
+            text_style: Style::default().fg(Color::White).bg(Color::Black),
+            border_style: Style::default().fg(Color::White).bg(Color::Black),
+        }
+    }
 }
 
 impl Clone for WStyle {
     fn clone(&self) -> Self {
         WStyle {
-            title_style: self.title_style,
-            text_style: self.text_style,
-            border_style: self.border_style,
-        }
-    }
-}
-
-impl Default for WStyle {
-    fn default() -> Self {
-        WStyle {
-            title_style: Style::default(),
-            text_style: Style::default(),
-            border_style: Style::default(),
+            title_style: self.title_style.clone(),
+            text_style: self.text_style.clone(),
+            border_style: self.border_style.clone(),
         }
     }
 }
@@ -77,14 +84,33 @@ impl From<WStyleOpt> for WStyle {
     }
 }
 
-impl Clone for WStyleOpt {
-    fn clone(&self) -> Self {
-        WStyleOpt {
-            title_style: self.title_style,
-            text_style: self.text_style,
-            border_style: self.border_style,
+impl WStyle {
+    pub fn new(title_style: Style, text_style: Style, border_style: Style) -> Self {
+        WStyle {
+            title_style,
+            text_style,
+            border_style,
         }
     }
+
+    pub fn set(&mut self, style: WStyleOpt) -> &mut Self {
+        if let Some(title_style) = style.title_style {
+            self.title_style = title_style;
+        }
+        if let Some(text_style) = style.text_style {
+            self.text_style = text_style;
+        }
+        if let Some(border_style) = style.border_style {
+            self.border_style = border_style;
+        }
+        self
+    }
+}
+
+pub struct WStyleOpt {
+    title_style: Option<Style>,
+    text_style: Option<Style>,
+    border_style: Option<Style>,
 }
 
 impl Default for WStyleOpt {
@@ -97,53 +123,76 @@ impl Default for WStyleOpt {
     }
 }
 
-impl WStyle {
-    pub fn new(title_style: Style, text_style: Style, border_style: Style) -> Self {
-        WStyle {
-            title_style,
-            text_style,
-            border_style,
+impl Clone for WStyleOpt {
+    fn clone(&self) -> Self {
+        WStyleOpt {
+            title_style: self.title_style,
+            text_style: self.text_style,
+            border_style: self.border_style,
         }
     }
+}
 
-    pub fn set(&mut self, style: WStyleOpt) {
-        if let Some(title_style) = style.title_style {
-            self.title_style = title_style;
-        }
-        if let Some(text_style) = style.text_style {
-            self.text_style = text_style;
-        }
-        if let Some(border_style) = style.border_style {
-            self.border_style = border_style;
-        }
+impl WStyleOpt {
+    pub fn set_border_style(mut self, style: Style) -> Self {
+        self.border_style = Some(style);
+        self
     }
 }
 
 
 pub struct BasicContainer {
-    bounds: Rect,
     child: Box<dyn Widget>,
 }
 
-impl Container<F> for BasicContainer {
-    fn draw(&self, f: &mut Frame<F>) {
-        self.child.draw(f);
+impl Container for BasicContainer {
+    fn draw(&self, f: &mut Frame<F>, area: Rect) {
+        self.child.draw(f, area);
     }
 
     fn set_style(&mut self, style: WStyleOpt) {
         self.child.set_style(style);
     }
 
-    fn set_bounds(&mut self, bounds: Rect) {
-        self.bounds = bounds;
-        self.child.set_bounds(bounds);
+    fn set_override_style(&mut self, style: WStyleOpt) {
+        self.child.set_override_style(style);
+    }
+
+    fn unset_override_style(&mut self) {
+        self.child.unset_override_style();
+    }
+
+    fn set_child(&mut self, index: usize, child: Box<dyn Container>) {
+    }
+
+    fn get_child(&self, index: u8) -> Option<&Box<dyn Container>> {
+        None
+    }
+
+    fn get_child_mut(&mut self, index: u8) -> Option<&mut Box<dyn Container>> {
+        None
+    }
+
+    fn set_widget(&mut self, widget: Box<dyn Widget>) {
+        self.child = widget;
+    }
+
+    fn get_widget(&self) -> Option<&Box<dyn Widget>> {
+        Some(&self.child)
+    }
+
+    fn get_widget_mut(&mut self) -> Option<&mut Box<dyn Widget>> {
+        Some(&mut self.child)
+    }
+
+    fn has_children(&self) -> bool {
+        false
     }
 }
 
 impl Default for BasicContainer {
     fn default() -> Self {
         BasicContainer {
-            bounds: Rect::default(),
             child: Box::new(BasicWidget::default()),
         }
     }
@@ -152,74 +201,77 @@ impl Default for BasicContainer {
 impl BasicContainer {
     pub fn new(child: Box<dyn Widget>) -> Self {
         BasicContainer {
-            bounds: Rect::default(),
             child,
-        }
-    }
-
-    pub fn set_child(&mut self, child: Box<dyn Widget>, index: usize) {
-        match index {
-            0 => self.child = child,
-            _ => {}, // just ignore it.
-        }
-    }
-
-    pub fn get_child(&self, index: usize) -> Option<&Box<dyn Widget>> {
-        match index {
-            0 => Some(&self.child),
-            _ => None,
         }
     }
 }
 
 
 pub struct RootContainer {
-    bounds: Rect,
-    child: Vec<Box<dyn Container<F>>>,
+    child: Box<dyn Container>,
 }
 
-impl Container<F> for RootContainer {
-    fn draw(&self, f: &mut Frame<F>) {
-        for child in &self.child {
-            child.draw(f);
+impl Container for RootContainer {
+    fn draw(&self, f: &mut Frame<F>, area: Rect) {
+        if area.width < 2 || area.height < 2 {
+            return;
         }
+        self.child.draw(f, area);
     }
 
     fn set_style(&mut self, style: WStyleOpt) {
-        for child in &mut self.child {
-            child.set_style(style.clone());
-        }
+        self.child.set_style(style);
     }
 
-    fn set_bounds(&mut self, bounds: Rect) {
-        self.bounds = bounds;
-        for child in &mut self.child {
-            child.set_bounds(bounds);
-        }
+    fn set_override_style(&mut self, style: WStyleOpt) {
+        self.child.set_override_style(style);
     }
-}
 
-impl MetaContainer<F> for RootContainer {
-    fn set_child(&mut self, index: usize, child: Box<dyn Container<F>>) {
+    fn unset_override_style(&mut self) {
+        self.child.unset_override_style();
+    }
+
+    fn set_child(&mut self, index: usize, child: Box<dyn Container>) {
         match index {
-            0 => self.child.push(child),
-            _ => {}, // just ignore it.
+            0 => self.child = child,
+            _ => (),
         }
     }
 
-    fn get_child(&self, index: usize) -> Option<&Box<dyn Container<F>>> {
+    fn get_child(&self, index: u8) -> Option<&Box<dyn Container>> {
         match index {
-            0 => Some(&self.child[0]),
+            0 => Some(&self.child),
             _ => None,
         }
+    }
+
+    fn get_child_mut(&mut self, index: u8) -> Option<&mut Box<dyn Container>> {
+        match index {
+            0 => Some(&mut self.child),
+            _ => None,
+        }
+    }
+
+    fn set_widget(&mut self, widget: Box<dyn Widget>) {
+    }
+
+    fn get_widget(&self) -> Option<&Box<dyn Widget>> {
+        None
+    }
+
+    fn get_widget_mut(&mut self) -> Option<&mut Box<dyn Widget>> {
+        None
+    }
+
+    fn has_children(&self) -> bool {
+        true
     }
 }
 
 impl Default for RootContainer {
     fn default() -> Self {
         RootContainer {
-            bounds: Rect::default(),
-            child: vec![],
+            child: Box::new(BasicContainer::default()),
         }
     }
 }
@@ -227,23 +279,54 @@ impl Default for RootContainer {
 impl RootContainer {
     pub fn new() -> Self {
         RootContainer {
-            bounds: Rect::default(),
-            child: vec![],
+            child: Box::new(BasicContainer::default()),
         }
+    }
+
+    pub fn into_dyn_container(self) -> Box<dyn Container> {
+        Box::new(self)
     }
 }
 
 
 pub struct HSplitContainer {
-    bounds: Rect,
-    children: Vec<Box<dyn Container<F>>>,
+    children: Vec<Box<dyn Container>>,
     split: f32,
 }
 
-impl Container<F> for HSplitContainer {
-    fn draw(&self, f: &mut Frame<F>) {
-        self.children[0].draw(f);
-        self.children[1].draw(f);
+impl Container for HSplitContainer {
+    fn draw(&self, f: &mut Frame<F>, area: Rect) {
+        let area = area;
+        let mut split = self.split;
+        if split < 0.0 {
+            split = 0.0;
+        } else if split > 1.0 {
+            split = 1.0;
+        }
+        let split = split * area.width as f32;
+        let split = split as u16;
+        let left = Rect {
+            x: area.x,
+            y: area.y,
+            width: split,
+            height: area.height,
+        };
+        let right = Rect {
+            x: area.x + split,
+            y: area.y,
+            width: area.width - split,
+            height: area.height,
+        };
+        if left.width < 2 || right.width < 2 {
+            if self.split > 0.5 {
+                self.children[0].draw(f, area);
+            } else {
+                self.children[1].draw(f, area);
+            }
+        } else {
+            self.children[0].draw(f, left);
+            self.children[1].draw(f, right);
+        }
     }
 
     fn set_style(&mut self, style: WStyleOpt) {
@@ -251,46 +334,57 @@ impl Container<F> for HSplitContainer {
         self.children[1].set_style(style);
     }
 
-    fn set_bounds(&mut self, bounds: Rect) {
-        let left = Rect {
-            x: bounds.x,
-            y: bounds.y,
-            width: (bounds.width as f32 * self.split) as u16,
-            height: bounds.height,
-        };
-        let right = Rect {
-            x: bounds.x + left.width,
-            y: bounds.y,
-            width: bounds.width - left.width,
-            height: bounds.height,
-        };
-        self.children[0].set_bounds(left);
-        self.children[1].set_bounds(right);
-        self.bounds = bounds;
+    fn set_override_style(&mut self, style: WStyleOpt) {
+        self.children[0].set_override_style(style.clone());
+        self.children[1].set_override_style(style);
     }
-}
 
-impl MetaContainer<F> for HSplitContainer {
-    fn set_child(&mut self, index: usize, child: Box<dyn Container<F>>,) {
-        match index {
-            0 => self.children.push(child),
-            _ => {}, // just ignore it.
+    fn unset_override_style(&mut self) {
+        self.children[0].unset_override_style();
+        self.children[1].unset_override_style();
+    }
+
+    fn set_child(&mut self, index: usize, child: Box<dyn Container>) {
+        if index < self.children.len() {
+            self.children[index] = child;
         }
     }
 
-    fn get_child(&self, index: usize) -> Option<&Box<dyn Container<F>>> {
-        match index {
-            0 => Some(&self.children[0]),
-            1 => Some(&self.children[1]),
-            _ => None,
+    fn get_child(&self, index: u8) -> Option<&Box<dyn Container>> {
+        if index < self.children.len() as u8 {
+            Some(&self.children[index as usize])
+        } else {
+            None
         }
+    }
+
+    fn get_child_mut(&mut self, index: u8) -> Option<&mut Box<dyn Container>> {
+        if index < self.children.len() as u8 {
+            Some(&mut self.children[index as usize])
+        } else {
+            None
+        }
+    }
+
+    fn set_widget(&mut self, widget: Box<dyn Widget>) {
+    }
+
+    fn get_widget(&self) -> Option<&Box<dyn Widget>> {
+        None
+    }
+
+    fn get_widget_mut(&mut self) -> Option<&mut Box<dyn Widget>> {
+        None
+    }
+
+    fn has_children(&self) -> bool {
+        true
     }
 }
 
 impl Default for HSplitContainer {
     fn default() -> Self {
         HSplitContainer {
-            bounds: Rect::default(),
             children: vec![Box::new(BasicContainer::default()), Box::new(BasicContainer::default())],
             split: 0.5,
         }
@@ -298,26 +392,57 @@ impl Default for HSplitContainer {
 }
 
 impl HSplitContainer {
-    pub fn new(left: Box<dyn Container<F>>, right: Box<dyn Container<F>>, split: f32) -> Self {
+    pub fn new(left: Box<dyn Container>, right: Box<dyn Container>, split: f32) -> Self {
         HSplitContainer {
-            bounds: Rect::default(),
             children: vec![left, right],
             split,
         }
+    }
+
+    fn set_split(&mut self, split: f32) {
+        self.split = split;
     }
 }
 
 
 pub struct VSplitContainer {
-    bounds: Rect,
-    children: Vec<Box<dyn Container<F>>>,
+    children: Vec<Box<dyn Container>>,
     split: f32,
 }
 
-impl Container<F> for VSplitContainer {
-    fn draw(&self, f: &mut Frame<F>) {
-        self.children[0].draw(f);
-        self.children[1].draw(f);
+impl Container for VSplitContainer {
+    fn draw(&self, f: &mut Frame<F>, area: Rect) {
+        let area = area;
+        let mut split = self.split;
+        if split < 0.0 {
+            split = 0.0;
+        } else if split > 1.0 {
+            split = 1.0;
+        }
+        let split = split * area.height as f32;
+        let split = split as u16;
+        let top = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: split,
+        };
+        let bottom = Rect {
+            x: area.x,
+            y: area.y + split,
+            width: area.width,
+            height: area.height - split,
+        };
+        if top.height < 2 || bottom.height < 2 {
+            if self.split > 0.5 {
+                self.children[0].draw(f, area);
+            } else {
+                self.children[1].draw(f, area);
+            }
+        } else {
+            self.children[0].draw(f, top);
+            self.children[1].draw(f, bottom);
+        }
     }
 
     fn set_style(&mut self, style: WStyleOpt) {
@@ -325,46 +450,57 @@ impl Container<F> for VSplitContainer {
         self.children[1].set_style(style);
     }
 
-    fn set_bounds(&mut self, bounds: Rect) {
-        let top = Rect {
-            x: bounds.x,
-            y: bounds.y,
-            width: bounds.width,
-            height: (bounds.height as f32 * self.split) as u16,
-        };
-        let bottom = Rect {
-            x: bounds.x,
-            y: bounds.y + top.height,
-            width: bounds.width,
-            height: bounds.height - top.height,
-        };
-        self.children[0].set_bounds(top);
-        self.children[1].set_bounds(bottom);
-        self.bounds = bounds;
+    fn set_override_style(&mut self, style: WStyleOpt) {
+        self.children[0].set_override_style(style.clone());
+        self.children[1].set_override_style(style);
     }
-}
 
-impl MetaContainer<F> for VSplitContainer {
-    fn set_child(&mut self, index: usize,  child: Box<dyn Container<F>>) {
-        match index {
-            0 => self.children.push(child),
-            _ => {}, // just ignore it.
+    fn unset_override_style(&mut self) {
+        self.children[0].unset_override_style();
+        self.children[1].unset_override_style();
+    }
+
+    fn set_child(&mut self, index: usize, child: Box<dyn Container>) {
+        if index < self.children.len() {
+            self.children[index] = child;
         }
     }
 
-    fn get_child(&self, index: usize) -> Option<&Box<dyn Container<F>>> {
-        match index {
-            0 => Some(&self.children[0]),
-            1 => Some(&self.children[1]),
-            _ => None,
+    fn get_child(&self, index: u8) -> Option<&Box<dyn Container>> {
+        if index < self.children.len() as u8 {
+            Some(&self.children[index as usize])
+        } else {
+            None
         }
+    }
+
+    fn get_child_mut(&mut self, index: u8) -> Option<&mut Box<dyn Container>> {
+        if index < self.children.len() as u8 {
+            Some(&mut self.children[index as usize])
+        } else {
+            None
+        }
+    }
+
+    fn set_widget(&mut self, widget: Box<dyn Widget>) {
+    }
+
+    fn get_widget(&self) -> Option<&Box<dyn Widget>> {
+        None
+    }
+
+    fn get_widget_mut(&mut self) -> Option<&mut Box<dyn Widget>> {
+        None
+    }
+
+    fn has_children(&self) -> bool {
+        true
     }
 }
 
 impl Default for VSplitContainer {
     fn default() -> Self {
         VSplitContainer {
-            bounds: Rect::default(),
             children: vec![Box::new(BasicContainer::default()), Box::new(BasicContainer::default())],
             split: 0.5,
         }
@@ -372,9 +508,8 @@ impl Default for VSplitContainer {
 }
 
 impl VSplitContainer {
-    pub fn new(top: Box<dyn Container<F>>, bottom: Box<dyn Container<F>>, split: f32) -> Self {
+    pub fn new(top: Box<dyn Container>, bottom: Box<dyn Container>, split: f32) -> Self {
         VSplitContainer {
-            bounds: Rect::default(),
             children: vec![top, bottom],
             split,
         }
@@ -383,47 +518,56 @@ impl VSplitContainer {
 
 
 pub struct BasicWidget {
-    bounds: Rect,
     title: String,
     text: String,
     style: WStyle,
+    override_style: Option<WStyleOpt>,
 }
 
 impl Widget for BasicWidget {
-    fn draw(&self, f: &mut Frame<F>) {
-        let rect = self.bounds;
-        let block = tui::widgets::Block::default()
-            .borders(tui::widgets::Borders::ALL)
-            .border_style(self.style.border_style)
-            .title(Span::styled(self.title.clone(), self.style.title_style));
+    fn draw(&self, f: &mut Frame<F>, area: Rect) {
+        let local_style = self.get_style();
+        let rect = area;
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(local_style.border_style)
+            .title(Span::styled(self.title.clone(), local_style.title_style));
         f.render_widget(block, rect);
-        let text = Text::styled(self.text.clone(), self.style.text_style);
+        let text = Text::styled(self.text.clone(), local_style.text_style);
         let text = Paragraph::new(text)
             .block(Block::default().borders(Borders::NONE))
+            .wrap(Wrap { trim: true })
             .alignment(Alignment::Left);
         f.render_widget(text, Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2));
     }
 
-    fn get_style(&self) -> &Style {
-        &self.style.text_style
+    fn get_style(&self) -> WStyle {
+        match &self.override_style {
+            Some(style) => self.style.clone().set(style.clone()).to_owned(),
+            None => self.style.clone(),
+        }
+    }
+
+    fn set_override_style(&mut self, style: WStyleOpt) {
+        self.override_style = Some(style);
+    }
+
+    fn unset_override_style(&mut self) {
+        self.override_style = None;
     }
 
     fn set_style(&mut self, style: WStyleOpt) {
         self.style.set(style);
-    }
-
-    fn set_bounds(&mut self, bounds: Rect) {
-        self.bounds = bounds;
     }
 }
 
 impl Default for BasicWidget {
     fn default() -> Self {
         BasicWidget {
-            bounds: Rect::default(),
             title: String::from(""),
             text: String::from(""),
             style: WStyle::default(),
+            override_style: None
         }
     }
 }
@@ -431,10 +575,10 @@ impl Default for BasicWidget {
 impl BasicWidget {
     pub fn new(title: String, text: String) -> Self {
         BasicWidget {
-            bounds: Rect::default(),
             title,
             text,
             style: WStyle::default(),
+            override_style: None
         }
     }
 }
